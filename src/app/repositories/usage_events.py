@@ -57,10 +57,11 @@ def month_totals(conn, tenant_id, period_start, period_end) -> dict:
     return conn.execute(
         """
         SELECT
-            COALESCE(SUM(quantity) FILTER (WHERE event_type = 'api_call'), 0)  AS api_calls,
-            COALESCE(SUM(quantity) FILTER (WHERE event_type = 'ai_tokens'), 0) AS ai_tokens,
-            COALESCE(SUM(cost_nanos), 0)                                       AS cost_nanos,
-            COUNT(*)                                                           AS event_count
+            COALESCE(SUM(quantity) FILTER (WHERE event_type = 'api_call'), 0) AS api_calls,
+            COALESCE(SUM(input_tokens + cached_input_tokens
+                         + output_tokens + reasoning_tokens), 0)              AS ai_tokens,
+            COALESCE(SUM(cost_nanos), 0)                                      AS cost_nanos,
+            COUNT(*)                                                          AS event_count
         FROM usage_events
         WHERE tenant_id = %s AND occurred_at >= %s AND occurred_at < %s
         """,

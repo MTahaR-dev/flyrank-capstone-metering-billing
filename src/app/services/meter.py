@@ -2,10 +2,18 @@ import hashlib
 import json
 from dataclasses import dataclass
 
-from app.errors import IdempotencyConflict
+from app.errors import IdempotencyConflict, TenantNotFound
 from app.repositories import tenants as tenants_repo
 from app.repositories import usage_events as usage_repo
-from app.services.pricing import PRICING_VERSION, TokenUsage, token_cost_nanos
+from app.services import quota
+from app.services.pricing import (
+    PRICING_VERSION,
+    TokenUsage,
+    api_call_cost_nanos,
+    token_cost_nanos,
+)
+
+EVENT_TYPE = "api_call"
 
 
 @dataclass(frozen=True)
@@ -31,24 +39,48 @@ def fingerprint(event_type: str, quantity: int, tokens: TokenUsage) -> str:
 
 
 def record(conn, tenant_id, tokens: TokenUsage, idempotency_key: str) -> MeterResult:
-    """Record one ai_tokens usage event, exactly once per idempotency key.
+    """Record one billable event, exactly once per idempotency key.
 
-    Returns MeterResult(event, created=True) the first time a key is seen, and
-    MeterResult(event, created=False) for any repeat of that same key.
-
-    Raises IdempotencyConflict if the key was first used for different work.
+    Returns created=True the first time a key is seen and created=False for any
+    repeat of it. Raises IdempotencyConflict if the key was first used for
+    different work, SubscriptionInactive if the plan is not in good standing, and
+    QuotaExceeded if the request would take the tenant past its monthly limit.
     """
-    event_type = "ai_tokens"
-    quantity = tokens.total
-    cost_nanos = token_cost_nanos(tokens)
-    request_fingerprint = fingerprint(event_type, quantity, tokens)
+    quantity = 1
+    cost_nanos = api_call_cost_nanos(quantity) + token_cost_nanos(tokens)
+    request_fingerprint = fingerprint(EVENT_TYPE, quantity, tokens)
 
-    tenants_repo.lock_for_update(conn, tenant_id)
+    tenant = tenants_repo.lock_for_update(conn, tenant_id)
+    if tenant is None:
+        raise TenantNotFound(str(tenant_id))
+
+    # A retry must return the original answer, never a fresh judgement, so the
+    # idempotency lookup happens before any quota or subscription check.
+    original = usage_repo.find_by_idempotency_key(conn, tenant_id, idempotency_key)
+    if original is not None:
+        conn.commit()
+        if original["request_fingerprint"] != request_fingerprint:
+            raise IdempotencyConflict(
+                "Idempotency key was already used for a different request"
+            )
+        return MeterResult(event=original, created=False)
+
+    quota.require_active_subscription(tenant["subscription_status"])
+
+    period_start, period_end = quota.current_period()
+    totals = usage_repo.month_totals(conn, tenant_id, period_start, period_end)
+
+    quota.require_within_quota(
+        "api_calls", totals["api_calls"], quantity, tenant["api_call_quota"]
+    )
+    quota.require_within_quota(
+        "ai_tokens", totals["ai_tokens"], tokens.total, tenant["ai_token_quota"]
+    )
 
     inserted = usage_repo.insert_if_new(
         conn,
         tenant_id,
-        event_type,
+        EVENT_TYPE,
         quantity,
         tokens,
         cost_nanos,
@@ -57,17 +89,11 @@ def record(conn, tenant_id, tokens: TokenUsage, idempotency_key: str) -> MeterRe
         request_fingerprint,
     )
 
-    if inserted is not None:
+    # None means a concurrent request inserted this key first; return that row.
+    if inserted is None:
+        original = usage_repo.find_by_idempotency_key(conn, tenant_id, idempotency_key)
         conn.commit()
-        return MeterResult(event=inserted, created=True)
+        return MeterResult(event=original, created=False)
 
-    # No row came back: this tenant has already used this key.
-    original = usage_repo.find_by_idempotency_key(conn, tenant_id, idempotency_key)
     conn.commit()
-
-    if original["request_fingerprint"] != request_fingerprint:
-        raise IdempotencyConflict(
-            "Idempotency key was already used for a different request"
-        )
-
-    return MeterResult(event=original, created=False)
+    return MeterResult(event=inserted, created=True)

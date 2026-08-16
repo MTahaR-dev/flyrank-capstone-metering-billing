@@ -22,7 +22,14 @@ def find_by_api_key(conn, raw_key: str) -> dict | None:
 def lock_for_update(conn, tenant_id) -> dict | None:
     """Serialise billable writes for one tenant without affecting any other."""
     return conn.execute(
-        "SELECT id, plan_code, subscription_status FROM tenants WHERE id = %s FOR UPDATE",
+        """
+        SELECT t.id, t.plan_code, t.subscription_status,
+               p.api_call_quota, p.ai_token_quota
+        FROM tenants t
+        JOIN plans p ON p.code = t.plan_code
+        WHERE t.id = %s
+        FOR UPDATE OF t
+        """,
         (tenant_id,),
     ).fetchone()
 
