@@ -54,7 +54,7 @@ def find_by_idempotency_key(conn, tenant_id, idempotency_key: str) -> dict | Non
 
 def month_totals(conn, tenant_id, period_start, period_end) -> dict:
     """Usage and cost for one tenant within a half-open time window."""
-    return conn.execute(
+    row = conn.execute(
         """
         SELECT
             COALESCE(SUM(quantity) FILTER (WHERE event_type = 'api_call'), 0) AS api_calls,
@@ -67,3 +67,6 @@ def month_totals(conn, tenant_id, period_start, period_end) -> dict:
         """,
         (tenant_id, period_start, period_end),
     ).fetchone()
+
+    # SUM() over BIGINT returns numeric, which arrives as Decimal
+    return {key: int(value) for key, value in row.items()}

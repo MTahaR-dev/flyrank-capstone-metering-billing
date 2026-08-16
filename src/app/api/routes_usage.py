@@ -4,6 +4,7 @@ from app.api.deps import get_db, get_tenant, require_idempotency_key
 from app.api.schemas import GenerateRequest, GenerateResponse
 from app.services.meter import record
 from app.services.pricing import TokenUsage
+from app.services.usage import monthly_rollup
 
 router = APIRouter()
 
@@ -51,3 +52,9 @@ def generate(
         pricing_version=event["pricing_version"],
         occurred_at=event["occurred_at"].isoformat(),
     )
+
+
+@router.get("/usage", tags=["Billing"])
+def usage(tenant=Depends(get_tenant), conn=Depends(get_db)):
+    """This calendar month's usage and cost for the authenticated tenant."""
+    return monthly_rollup(conn, tenant)
