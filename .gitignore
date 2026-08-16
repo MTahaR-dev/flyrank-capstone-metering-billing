@@ -8,6 +8,7 @@ __pycache__/
 htmlcov/
 
 .env
+demo-keys.txt
 
 .vscode/
 .idea/
