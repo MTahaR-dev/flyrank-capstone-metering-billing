@@ -9,6 +9,7 @@ htmlcov/
 
 .env
 demo-keys.txt
+stripe.exe
 
 .vscode/
 .idea/

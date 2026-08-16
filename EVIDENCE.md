@@ -279,10 +279,50 @@ generated with the same HMAC scheme Stripe uses and verified by Stripe's own
 
 ### Subscription checkout works end-to-end in Stripe test mode
 
-`POST /billing/checkout` creates a Checkout session in test mode and returns its URL.
-Running the hosted Checkout page with card `4242 4242 4242 4242` produces a real
-`checkout.session.completed` event, forwarded locally by `stripe listen`, which the
-handler above verifies and applies.
+Run against a real Stripe sandbox, with the CLI forwarding events to the local API:
+
+```
+$ stripe listen --forward-to localhost:8000/webhooks/stripe
+> Ready! Your webhook signing secret is whsec_...
+
+$ curl -X POST http://localhost:8000/billing/checkout -H "X-API-Key: sk_demo_..."
+{ "checkout_url": "https://checkout.stripe.com/c/pay/cs_test_...", "session_id": "cs_test_..." }
+```
+
+The hosted Checkout page was completed with test card `4242 4242 4242 4242`, which
+returned to the success URL:
+
+```
+GET /billing/success
+{"status":"checkout complete"}
+```
+
+Stripe emitted `checkout.session.completed`, the CLI forwarded it, and the handler
+verified and applied it. The tenant that was on the Free plan before Checkout:
+
+```
+$ curl http://localhost:8000/usage -H "X-API-Key: sk_demo_..."
+{
+  "tenant_name": "Acme Corp",
+  "plan": "pro",
+  "subscription_status": "active",
+  "api_calls": { "used": 1, "limit": 50000,   "remaining": 49999 },
+  "ai_tokens": { "used": 1750, "limit": 5000000, "remaining": 4998250 },
+  "cost": {
+    "events": 1,
+    "metered_nanos": 1062500,
+    "metered_usd": "0.001062500",
+    "plan_base_cents": 2900,
+    "total_cents": 2900,
+    "total_usd": "29.00"
+  }
+}
+```
+
+The plan moved from `free` to `pro`, the quotas rose from 1,000 / 100,000 to
+50,000 / 5,000,000, and the $29.00 base price entered the rollup. No plan field is ever
+written by the application on its own — it changed only because a signature-verified
+event said so.
 
 Setup and the exact commands are in the README under *Stripe test mode*.
 
