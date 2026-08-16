@@ -4,6 +4,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.requests import Request
 
 from app import db
+from app.api.routes_stripe import router as stripe_router
 from app.api.routes_usage import router as usage_router
 from app.errors import (
     IdempotencyConflict,
@@ -19,6 +20,7 @@ app = FastAPI(
 )
 
 app.include_router(usage_router)
+app.include_router(stripe_router)
 
 
 @app.get("/health", tags=["Meta"])

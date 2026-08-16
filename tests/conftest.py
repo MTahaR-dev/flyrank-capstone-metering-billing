@@ -47,3 +47,13 @@ def tenant_factory(conn):
 @pytest.fixture
 def tenant(tenant_factory):
     return tenant_factory()
+
+
+@pytest.fixture(autouse=True)
+def clear_test_webhook_events(conn):
+    """Test event ids are deterministic, so they must not survive between runs."""
+    conn.execute("DELETE FROM processed_webhook_events WHERE event_id LIKE 'evt_%%'")
+    conn.commit()
+    yield
+    conn.execute("DELETE FROM processed_webhook_events WHERE event_id LIKE 'evt_%%'")
+    conn.commit()
