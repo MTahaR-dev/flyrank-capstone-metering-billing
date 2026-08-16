@@ -1,0 +1,39 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: billing-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-billing}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-billing_local_pw}
+      POSTGRES_DB: ${POSTGRES_DB:-billing}
+    ports:
+      - "5432:5432"
+    volumes:
+      - billing_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-billing} -d ${POSTGRES_DB:-billing}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    container_name: billing-app
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-billing}:${POSTGRES_PASSWORD:-billing_local_pw}@db:5432/${POSTGRES_DB:-billing}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET}
+      STRIPE_PRO_PRICE_ID: ${STRIPE_PRO_PRICE_ID}
+      CHECKOUT_SUCCESS_URL: ${CHECKOUT_SUCCESS_URL}
+      CHECKOUT_CANCEL_URL: ${CHECKOUT_CANCEL_URL}
+    ports:
+      - "8000:8000"
+
+volumes:
+  billing_data:
