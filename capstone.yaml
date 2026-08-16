@@ -1,0 +1,73 @@
+name: usage-metering-billing-engine
+description: >-
+  Usage metering with exactly-once guarantees, quota enforcement with honest status
+  codes, integer money arithmetic with pinned AI-token pricing, and Stripe test-mode
+  subscriptions synchronised through signature-verified, deduplicated webhooks.
+
+language: python
+framework: fastapi
+database: postgresql
+
+run: docker compose up --build
+seed: python scripts/seed.py
+test: python -m pytest tests -q
+
+base_url: http://localhost:8000
+
+endpoints:
+  - method: GET
+    path: /health
+    auth: none
+    description: Liveness plus a database round trip.
+
+  - method: GET
+    path: /public/docs
+    auth: none
+    description: Interactive OpenAPI documentation, served at /docs.
+
+  - method: POST
+    path: /generate
+    auth: X-API-Key
+    headers:
+      - Idempotency-Key
+    description: >-
+      The billable action. Records exactly one usage event per idempotency key,
+      enforces the tenant's plan quota, and returns the cost of the call.
+    responses:
+      201: usage recorded
+      200: idempotency key already used; the original result is returned
+      400: malformed body or missing Idempotency-Key
+      401: missing or unknown API key
+      402: subscription is past_due or canceled
+      409: idempotency key reused for a different request
+      429: monthly quota would be exceeded
+
+  - method: GET
+    path: /usage
+    auth: X-API-Key
+    description: This calendar month's usage, limits and cost for the tenant.
+
+  - method: POST
+    path: /billing/checkout
+    auth: X-API-Key
+    description: Creates a Stripe Checkout session for the Pro plan (test mode).
+
+  - method: POST
+    path: /webhooks/stripe
+    auth: Stripe-Signature
+    description: >-
+      Subscription lifecycle events. Verifies the signature against the raw body,
+      deduplicates by Stripe event id, and updates the tenant's plan and status.
+    responses:
+      200: processed, or ignored as a duplicate
+      400: missing or invalid signature
+
+acceptance:
+  script: python scripts/acceptance.py
+  probes:
+    - Same request twice with one idempotency key records exactly one usage event.
+    - A request reaching the quota exactly is allowed; the next one returns 429.
+    - A lapsed subscription returns 402 rather than 429.
+    - A forged webhook signature returns 400 and changes nothing.
+    - A replayed webhook event is processed once.
+    - Metered cost matches the pinned pricing tests exactly.
